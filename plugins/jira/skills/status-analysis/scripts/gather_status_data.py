@@ -174,6 +174,7 @@ class GatherConfig:
     status_summary_field: str = "customfield_10814"
     assignees: List[str] = field(default_factory=list)
     excluded_assignees: List[str] = field(default_factory=list)
+    issue_keys: List[str] = field(default_factory=list)
     updated_since_only: bool = False
 
 
@@ -806,6 +807,10 @@ class StatusDataGatherer:
 
     def _build_root_jql(self) -> str:
         """Build JQL to find root issues."""
+        if self.config.issue_keys:
+            key_list = ", ".join(self.config.issue_keys)
+            return f"key IN ({key_list}) ORDER BY rank ASC"
+
         parts = [
             f'project = "{self.config.project}"',
             "status != Closed",
@@ -1501,6 +1506,8 @@ Environment Variables:
     parser.add_argument("--status-field", default="customfield_10814", help="Status Summary field ID")
     parser.add_argument("--assignee", action="append", dest="assignees", help="Filter by assignee")
     parser.add_argument("--exclude-assignee", action="append", dest="excluded_assignees", help="Exclude assignee")
+    parser.add_argument("--issue", action="append", dest="issue_keys",
+                        help="Fetch specific issue keys only (bypasses project/component/label filters)")
     parser.add_argument("--updated-since-only", action="store_true",
                         help="Pre-filter: add updated>= to JQL and skip root issues whose Status Summary field did not change in the date range")
     parser.add_argument("-v", "--verbose", action="store_true", help="Enable verbose output (INFO level)")
@@ -1544,6 +1551,7 @@ Environment Variables:
         status_summary_field=args.status_field,
         assignees=args.assignees or [],
         excluded_assignees=args.excluded_assignees or [],
+        issue_keys=args.issue_keys or [],
         updated_since_only=args.updated_since_only,
     )
 

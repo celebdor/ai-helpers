@@ -139,20 +139,17 @@ Used by `/jira:update-weekly-status` to update the Status Summary custom field.
 
 ```
 * Color Status: {Red|Yellow|Green}
- * Status summary:
-     ** {achievement-or-progress-1}
-     ** {achievement-or-progress-2}
-     ** {achievement-or-progress-N}
- * Risks:
-     ** {risk-1-or-"None at this time"}
+* Status summary:
+  * {achievement-or-progress-1}
+  * {achievement-or-progress-2}
+  * {achievement-or-progress-N}
+* Risks:
+  * {risk-1-or-"None at this time"}
 ```
 
 ### Formatting Rules
 
-1. **Exact spacing matters**: The field may have specific formatting requirements
-   - Top-level bullet: `* ` (asterisk + space)
-   - Second-level: ` * ` (space + asterisk + space)
-   - Third-level: `     ** ` (5 spaces + double asterisk + space)
+1. **Standard markdown bullet lists**: Use `* ` for top-level and `  * ` (two-space indent) for nested items. Do NOT use wiki-style `**` for sub-bullets.
 
 2. **Color Status line**: Always first, exactly one of Red/Yellow/Green
 
@@ -194,36 +191,36 @@ Used by `/jira:update-weekly-status` to update the Status Summary custom field.
 **Green Status**:
 ```
 * Color Status: Green
- * Status summary:
-     ** PR #456 merged adding OAuth2 token validation with comprehensive unit tests
-     ** AUTH-102 completed: token refresh mechanism implemented and tested
-     ** AUTH-103 in progress: session handling refactor, draft PR submitted for review
- * Risks:
-     ** None at this time
+* Status summary:
+  * PR #456 merged adding OAuth2 token validation with comprehensive unit tests
+  * AUTH-102 completed: token refresh mechanism implemented and tested
+  * AUTH-103 in progress: session handling refactor, draft PR submitted for review
+* Risks:
+  * None at this time
 ```
 
 **Yellow Status**:
 ```
 * Color Status: Yellow
- * Status summary:
-     ** UI-201 design review completed, implementation 60% complete
-     ** AUTH-103 draft PR open but awaiting review capacity from team
-     ** Made progress on auth integration but slower than planned
- * Risks:
-     ** Review bandwidth may delay merge to next week
-     ** Upstream API deprecation notice received - may need refactor
+* Status summary:
+  * UI-201 design review completed, implementation 60% complete
+  * AUTH-103 draft PR open but awaiting review capacity from team
+  * Made progress on auth integration but slower than planned
+* Risks:
+  * Review bandwidth may delay merge to next week
+  * Upstream API deprecation notice received - may need refactor
 ```
 
 **Red Status**:
 ```
 * Color Status: Red
- * Status summary:
-     ** AUTH-104 blocked on Azure subscription approval for 2 weeks
-     ** No PRs merged this period due to blocker
-     ** Escalated to infrastructure team, awaiting response
- * Risks:
-     ** Deadline at risk if subscription not approved by Friday
-     ** May need to descope Azure AD integration from initial release
+* Status summary:
+  * AUTH-104 blocked on Azure subscription approval for 2 weeks
+  * No PRs merged this period due to blocker
+  * Escalated to infrastructure team, awaiting response
+* Risks:
+  * Deadline at risk if subscription not approved by Friday
+  * May need to descope Azure AD integration from initial release
 ```
 
 ## Format: feature_markdown
@@ -421,7 +418,7 @@ def format_ryg_field(issue_data, config):
     health = issue_data.analysis.health.capitalize()  # Green, Yellow, Red
 
     output.append(f"* Color Status: {health}")
-    output.append(" * Status summary:")
+    output.append("* Status summary:")
 
     # Combine achievements and in-progress items
     items = []
@@ -431,15 +428,15 @@ def format_ryg_field(issue_data, config):
         items.append(progress.description)
 
     for item in items:
-        output.append(f"     ** {item}")
+        output.append(f"  * {item}")
 
     # Risks section
-    output.append(" * Risks:")
+    output.append("* Risks:")
     if issue_data.analysis.risks:
         for risk in issue_data.analysis.risks[:2]:  # Limit to top 2
-            output.append(f"     ** {risk.description}")
+            output.append(f"  * {risk.description}")
     else:
-        output.append("     ** None at this time")
+        output.append("  * None at this time")
 
     return "\n".join(output)
 ```
@@ -528,7 +525,7 @@ Before outputting, validate the formatted text:
 - [ ] Color is exactly one of: Red, Yellow, Green
 - [ ] Status summary section present with at least one item
 - [ ] Risks section present (even if "None at this time")
-- [ ] Indentation matches expected format
+- [ ] Uses standard markdown bullets (`* ` and `  * `), not wiki-style `**`
 - [ ] No empty bullet points
 
 ## Escaping Special Characters
