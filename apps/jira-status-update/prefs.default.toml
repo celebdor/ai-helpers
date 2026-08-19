@@ -1,0 +1,33 @@
+# Default preferences for jira-status-update
+# Copy to ~/.config/jira-status-update/prefs.toml and customize
+
+[llm]
+model = "claude-sonnet-5"
+# Coding agent CLI for the "request changes" feature (r).
+# When set, revisions are handled by this agent — it can search GitHub,
+# fetch PR details, etc.  Supported values: "claude", "opencode".
+# When unset, revisions use a single Anthropic API call (no GitHub access).
+# coding_agent = "claude"
+
+writing_rules = [
+  "No fractions or ratios like 7/8 or 4/25",
+  "No completion percentages",
+  "RITS/paused items go in Risks section, not Status summary",
+  "Include Release Pending features as Green items",
+]
+
+[jira]
+url = "https://redhat.atlassian.net"
+# skills_dir is optional. When unset the app resolves it in order:
+#   1. JIRA_STATUS_UPDATE_SKILLS_DIR env var
+#   2. Previously auto-fetched copy in the platform data directory
+#   3. Repo-relative path (when running directly from the source tree)
+#   4. Auto git-clone of openshift-eng/ai-helpers into the data directory
+# Uncomment and set if you want to pin a specific local checkout:
+# skills_dir = "~/src/ai-helpers/plugins/jira/skills/status-analysis"
+
+[profiles.ocpstrat-hcp]
+project = "OCPSTRAT"
+component = "Hosted Control Planes"
+label = "control-plane-work"
+exclude = ["davegord@redhat.com", "aambewad@redhat.com"]

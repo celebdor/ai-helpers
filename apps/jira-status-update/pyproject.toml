@@ -1,0 +1,19 @@
+[project]
+name = "jira-status-update"
+version = "0.1.0"
+requires-python = ">=3.11"
+dependencies = [
+    "aiohttp>=3.9",
+    "anthropic[vertex]>=0.52",
+    "pyadf==0.5.2",
+    "textual>=3.0",
+]
+[project.scripts]
+jira-status-update = "status_update:cli"
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+[tool.setuptools]
+py-modules = ["status_update"]
+[dependency-groups]
+dev = ["pytest>=7.0"]
