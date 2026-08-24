@@ -9,11 +9,11 @@ dependencies = [
     "textual>=3.0",
 ]
 [project.scripts]
-jira-status-update = "status_update:cli"
+jira-status-update = "jira_status_update.cli:cli"
 [build-system]
 requires = ["setuptools>=64"]
 build-backend = "setuptools.build_meta"
-[tool.setuptools]
-py-modules = ["status_update"]
+[tool.setuptools.packages.find]
+where = ["src"]
 [dependency-groups]
 dev = ["pytest>=7.0"]

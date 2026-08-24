@@ -1,37 +1,24 @@
-"""Unit tests for status_update.py — all offline, no API keys required."""
+"""Unit tests for jira_status_update — all offline, no API keys required."""
 
 import argparse
 import base64
 import json
 import os
-import sys
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
 
-try:
-    import tomllib
-except ImportError:
-    import tomli as tomllib  # type: ignore[no-redef]
-
-sys.path.insert(0, str(Path(__file__).parent))
-from status_update import (
-    ReviewResult,
-    TokenUsage,
-    UserPrefs,
+from jira_status_update.app import ReviewResult, edit_in_editor, extract_color
+from jira_status_update.config import UserPrefs, find_scripts_dir, find_skills_dir, load_prefs
+from jira_status_update.gather import (
     _field_to_text,
     _prune_issue,
-    build_system_prompt,
-    edit_in_editor,
-    extract_color,
-    find_scripts_dir,
-    find_skills_dir,
-    get_jira_auth,
     is_significant,
     load_current_statuses,
-    load_prefs,
 )
+from jira_status_update.jira import get_jira_auth
+from jira_status_update.llm import TokenUsage, build_system_prompt
 
 
 # ─── build_system_prompt ─────────────────────────────────────────────────────
@@ -43,7 +30,7 @@ def test_build_system_prompt_includes_skill_docs(tmp_path):
     (tmp_path / "formatting.md").write_text(formatting)
     prefs = UserPrefs(writing_rules=["No fractions"])
 
-    with patch("status_update.find_skills_dir", return_value=tmp_path):
+    with patch("jira_status_update.llm.find_skills_dir", return_value=tmp_path):
         prompt = build_system_prompt(prefs)
 
     assert activity in prompt
@@ -59,7 +46,7 @@ def test_build_system_prompt_no_user_rules(tmp_path):
     (tmp_path / "formatting.md").write_text("formatting")
     prefs = UserPrefs()
 
-    with patch("status_update.find_skills_dir", return_value=tmp_path):
+    with patch("jira_status_update.llm.find_skills_dir", return_value=tmp_path):
         prompt = build_system_prompt(prefs)
 
     assert "Additional writing rules" not in prompt
@@ -67,7 +54,7 @@ def test_build_system_prompt_no_user_rules(tmp_path):
 
 def test_build_system_prompt_missing_files_silently_skipped(tmp_path):
     prefs = UserPrefs()
-    with patch("status_update.find_skills_dir", return_value=tmp_path):
+    with patch("jira_status_update.llm.find_skills_dir", return_value=tmp_path):
         prompt = build_system_prompt(prefs)
     assert "You are a Jira status analyst" in prompt
 
