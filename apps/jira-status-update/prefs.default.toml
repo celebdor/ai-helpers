@@ -26,6 +26,21 @@ url = "https://redhat.atlassian.net"
 # Uncomment and set if you want to pin a specific local checkout:
 # skills_dir = "~/src/ai-helpers/plugins/jira/skills/status-analysis"
 
+# update_mode controls how status updates are written to Jira.
+#   "replace" (default) — each approve overwrites customfield_10814 entirely.
+#   "prepend" — top-posts the new status above existing content with a date
+#               header (## YYYY-MM-DD), building a newest-first chronological log.
+#               Entries are separated by --- (thematic break).
+# Can be overridden per-profile or via --update-mode CLI flag.
+# update_mode = "replace"
+
+# max_history limits the number of entries kept in prepend mode.
+#   0 (default) = unlimited — all historical entries are preserved.
+#   Any positive integer trims older entries beyond that count.
+# Only meaningful when update_mode = "prepend".
+# Can be set per-profile.
+# max_history = 0
+
 [profiles.ocpstrat-hcp]
 project = "OCPSTRAT"
 component = "Hosted Control Planes"
