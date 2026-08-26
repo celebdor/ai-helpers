@@ -17,7 +17,12 @@ from jira_status_update.gather import (
     is_significant,
     load_current_statuses,
 )
-from jira_status_update.jira import get_jira_auth
+from jira_status_update.jira import (
+    StatusEntry,
+    _build_prepend_text,
+    get_jira_auth,
+    split_entries,
+)
 from jira_status_update.llm import TokenUsage, build_system_prompt
 
 
@@ -463,3 +468,212 @@ def test_profile_does_not_override_explicitly_set_args():
     assert args.component == "My Component"
     assert args.label == "my-label"
     assert args.model == "claude-haiku-4-5"  # profile fills model (was None)
+
+
+# ─── split_entries ──────────────────────────────────────────────────────────
+
+def test_split_entries_empty_string():
+    assert split_entries("") == []
+
+
+def test_split_entries_whitespace_only():
+    assert split_entries("   \n  ") == []
+
+
+def test_split_entries_no_date_headers():
+    """Text without ## headers is treated as a single undated entry."""
+    text = "* Color Status: Green\n\nAll good."
+    entries = split_entries(text)
+    assert len(entries) == 1
+    assert entries[0].date_str == ""
+    assert "Color Status: Green" in entries[0].body
+
+
+def test_split_entries_single_entry():
+    text = "## 2026-08-25\n\n* Color Status: Green\n\nAll good."
+    entries = split_entries(text)
+    assert len(entries) == 1
+    assert entries[0].date_str == "2026-08-25"
+    assert "Color Status: Green" in entries[0].body
+
+
+def test_split_entries_multiple_entries():
+    text = (
+        "## 2026-08-25\n\nNew status\n\n---\n\n"
+        "## 2026-08-18\n\nOlder status\n\n---\n\n"
+        "## 2026-08-11\n\nOldest status"
+    )
+    entries = split_entries(text)
+    assert len(entries) == 3
+    assert entries[0].date_str == "2026-08-25"
+    assert "New status" in entries[0].body
+    assert entries[1].date_str == "2026-08-18"
+    assert "Older status" in entries[1].body
+    assert entries[2].date_str == "2026-08-11"
+    assert "Oldest status" in entries[2].body
+
+
+def test_split_entries_strips_trailing_separator():
+    text = "## 2026-08-25\n\nSome status\n\n---"
+    entries = split_entries(text)
+    assert len(entries) == 1
+    assert entries[0].body == "Some status"
+    assert "---" not in entries[0].body
+
+
+def test_split_entries_preserves_body_content():
+    """Multiline body with bullet points is preserved."""
+    body = "* Color Status: Yellow\n\n* Risk: deadline slip\n* Mitigation: extra sprint"
+    text = f"## 2026-08-25\n\n{body}"
+    entries = split_entries(text)
+    assert entries[0].body == body
+
+
+# ─── _build_prepend_text ────────────────────────────────────────────────────
+
+def test_build_prepend_text_empty_existing():
+    result = _build_prepend_text("New status", "", today="2026-08-25")
+    assert result == "## 2026-08-25\n\nNew status"
+
+
+def test_build_prepend_text_prepends_before_existing():
+    existing = "## 2026-08-18\n\nOld status"
+    result = _build_prepend_text("New status", existing, today="2026-08-25")
+    assert result.startswith("## 2026-08-25\n\nNew status")
+    assert "---" in result
+    assert "## 2026-08-18\n\nOld status" in result
+    # New entry must come before old
+    assert result.index("2026-08-25") < result.index("2026-08-18")
+
+
+def test_build_prepend_text_same_day_dedup():
+    """If top entry is from today, replace it instead of adding a new one."""
+    existing = "## 2026-08-25\n\nMorning status\n\n---\n\n## 2026-08-18\n\nLast week"
+    result = _build_prepend_text("Afternoon status", existing, today="2026-08-25")
+    entries = split_entries(result)
+    assert len(entries) == 2
+    assert entries[0].date_str == "2026-08-25"
+    assert "Afternoon status" in entries[0].body
+    assert "Morning status" not in result
+    assert entries[1].date_str == "2026-08-18"
+
+
+def test_build_prepend_text_max_history_trims():
+    existing = (
+        "## 2026-08-18\n\nWeek 3\n\n---\n\n"
+        "## 2026-08-11\n\nWeek 2\n\n---\n\n"
+        "## 2026-08-04\n\nWeek 1"
+    )
+    result = _build_prepend_text("Week 4", existing, today="2026-08-25", max_history=3)
+    entries = split_entries(result)
+    assert len(entries) == 3
+    assert entries[0].date_str == "2026-08-25"
+    assert entries[1].date_str == "2026-08-18"
+    assert entries[2].date_str == "2026-08-11"
+    # Week 1 (2026-08-04) should be trimmed
+    assert "2026-08-04" not in result
+
+
+def test_build_prepend_text_max_history_zero_unlimited():
+    # Use valid dates spanning several months
+    dates = [
+        "2026-08-25", "2026-08-18", "2026-08-11", "2026-08-04",
+        "2026-07-28", "2026-07-21", "2026-07-14", "2026-07-07",
+        "2026-06-29", "2026-06-22",
+    ]
+    existing = "\n\n---\n\n".join(
+        f"## {d}\n\nWeek {i}" for i, d in enumerate(dates)
+    )
+    result = _build_prepend_text("Latest", existing, today="2026-09-01", max_history=0)
+    entries = split_entries(result)
+    assert len(entries) == 11  # 10 existing + 1 new
+
+
+def test_build_prepend_text_same_day_dedup_with_max_history():
+    """Same-day dedup + max_history should not double-count the replaced entry."""
+    existing = (
+        "## 2026-08-25\n\nEarlier today\n\n---\n\n"
+        "## 2026-08-18\n\nLast week"
+    )
+    result = _build_prepend_text("Updated today", existing, today="2026-08-25", max_history=2)
+    entries = split_entries(result)
+    assert len(entries) == 2
+    assert entries[0].date_str == "2026-08-25"
+    assert "Updated today" in entries[0].body
+    assert entries[1].date_str == "2026-08-18"
+
+
+def test_build_prepend_text_undated_existing():
+    """Existing content without date headers is preserved after the new entry."""
+    existing = "* Color Status: Green\n\nLegacy status"
+    result = _build_prepend_text("New status", existing, today="2026-08-25")
+    # New dated entry appears first, then separator, then legacy content
+    assert result.startswith("## 2026-08-25\n\nNew status")
+    assert "---" in result
+    assert "Legacy status" in result
+    # New content comes before legacy content
+    assert result.index("New status") < result.index("Legacy status")
+
+
+# ─── config: update_mode and max_history ────────────────────────────────────
+
+def test_user_prefs_defaults():
+    prefs = UserPrefs()
+    assert prefs.update_mode == "replace"
+    assert prefs.max_history == 0
+
+
+def test_load_prefs_reads_update_mode(tmp_path):
+    content = """
+[jira]
+update_mode = "prepend"
+max_history = 10
+"""
+    prefs_file = tmp_path / "prefs.toml"
+    prefs_file.write_text(content)
+    prefs = load_prefs(prefs_file)
+    assert prefs.update_mode == "prepend"
+    assert prefs.max_history == 10
+
+
+def test_load_prefs_update_mode_defaults_when_missing(tmp_path):
+    content = "[jira]\nurl = \"https://example.atlassian.net\"\n"
+    prefs_file = tmp_path / "prefs.toml"
+    prefs_file.write_text(content)
+    prefs = load_prefs(prefs_file)
+    assert prefs.update_mode == "replace"
+    assert prefs.max_history == 0
+
+
+def test_profile_can_set_update_mode():
+    """Profiles can override update_mode, resolved via the standard profile loop."""
+    prefs = UserPrefs(
+        profiles={"team-a": {"update_mode": "prepend", "max_history": 5}}
+    )
+    args = argparse.Namespace(
+        project="TEST", update_mode=None, profile="team-a",
+    )
+
+    if args.profile and args.profile in prefs.profiles:
+        for key, value in prefs.profiles[args.profile].items():
+            if not getattr(args, key, None):
+                setattr(args, key, value)
+
+    assert args.update_mode == "prepend"
+
+
+def test_cli_flag_overrides_profile_update_mode():
+    """CLI --update-mode flag takes priority over profile setting."""
+    prefs = UserPrefs(
+        profiles={"team-a": {"update_mode": "prepend"}}
+    )
+    args = argparse.Namespace(
+        project="TEST", update_mode="replace", profile="team-a",
+    )
+
+    if args.profile and args.profile in prefs.profiles:
+        for key, value in prefs.profiles[args.profile].items():
+            if not getattr(args, key, None):
+                setattr(args, key, value)
+
+    assert args.update_mode == "replace"  # CLI wins

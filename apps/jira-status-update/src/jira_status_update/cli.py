@@ -45,6 +45,12 @@ Environment variables:
     parser.add_argument("--profile", help="Named profile from prefs.toml")
     parser.add_argument("--prefs", type=Path, help="Path to prefs.toml")
     parser.add_argument("--refresh", action="store_true", help="Force re-gather even if cached data exists")
+    parser.add_argument(
+        "--update-mode", dest="update_mode", choices=["replace", "prepend"],
+        default=None,
+        help="How to write status updates: 'replace' overwrites the field, "
+             "'prepend' top-posts above existing content (default: from prefs or replace)",
+    )
     return parser
 
 
@@ -58,6 +64,10 @@ async def main() -> None:
         for key, value in profile.items():
             if not getattr(args, key, None):
                 setattr(args, key, value)
+
+    # Resolve update_mode: CLI flag → profile → global [jira] → default
+    if not args.update_mode:
+        args.update_mode = prefs.update_mode
 
     scripts_dir = find_scripts_dir(prefs)
     app = StatusUpdateApp(args, prefs, scripts_dir)

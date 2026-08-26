@@ -5,6 +5,7 @@ import os
 import subprocess
 import tempfile
 from dataclasses import dataclass
+from datetime import date
 from pathlib import Path
 from typing import Optional
 
@@ -12,8 +13,9 @@ import aiohttp
 
 from textual.app import App, ComposeResult
 from textual.binding import Binding
-from textual.screen import Screen
-from textual.widgets import DataTable, Footer, Header, Input, ProgressBar, RichLog, Static
+from textual.containers import Horizontal
+from textual.screen import ModalScreen, Screen
+from textual.widgets import Button, DataTable, Footer, Header, Input, Label, ProgressBar, RichLog, Static
 
 from .agent import _resolve_coding_agent, _run_agent_interactive
 from .config import UserPrefs
@@ -25,7 +27,7 @@ from .gather import (
     run_gather,
     save_drafts,
 )
-from .jira import get_jira_auth, update_jira_status
+from .jira import get_jira_auth, split_entries, update_jira_status
 from .llm import (
     TokenUsage,
     build_system_prompt,
@@ -79,6 +81,53 @@ def edit_in_editor(draft_text: str) -> Optional[str]:
     return result if result else None
 
 
+class DedupConfirmScreen(ModalScreen[bool]):
+    """Modal confirmation dialog for same-day dedup in prepend mode."""
+
+    CSS = """
+    DedupConfirmScreen {
+        align: center middle;
+    }
+    #dedup-dialog {
+        width: 60;
+        height: auto;
+        border: thick $accent;
+        background: $surface;
+        padding: 1 2;
+    }
+    #dedup-dialog Label {
+        width: 100%;
+        margin-bottom: 1;
+    }
+    #dedup-buttons {
+        width: 100%;
+        height: auto;
+        align: center middle;
+    }
+    #dedup-buttons Button {
+        margin: 0 1;
+    }
+    """
+
+    def __init__(self, issue_key: str, existing_date: str) -> None:
+        super().__init__()
+        self.issue_key = issue_key
+        self.existing_date = existing_date
+
+    def compose(self) -> ComposeResult:
+        with Static(id="dedup-dialog"):
+            yield Label(
+                f"A status entry dated {self.existing_date} already exists "
+                f"for {self.issue_key}. Replace today's entry or cancel?"
+            )
+            with Horizontal(id="dedup-buttons"):
+                yield Button("Replace today's entry", variant="warning", id="btn-replace")
+                yield Button("Cancel", variant="default", id="btn-cancel")
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        self.dismiss(event.button.id == "btn-replace")
+
+
 class ReviewScreen(Screen):
     """Interactive review: DataTable + new draft pane + previous status pane."""
 
@@ -130,6 +179,8 @@ class ReviewScreen(Screen):
         scripts_dir: Optional[Path] = None,
         args=None,
         system_prompt: str = "",
+        update_mode: str = "replace",
+        max_history: int = 0,
     ):
         super().__init__()
         self.issues = issues
@@ -146,9 +197,15 @@ class ReviewScreen(Screen):
         self.scripts_dir = scripts_dir
         self.args = args
         self.system_prompt = system_prompt
+        self.update_mode = update_mode
+        self.max_history = max_history
         self.results: dict[str, ReviewResult] = {}
         self._aiohttp_session: Optional[aiohttp.ClientSession] = None
         self._col_keys = None
+
+    @property
+    def _is_prepend(self) -> bool:
+        return self.update_mode == "prepend"
 
     def _save_drafts(self) -> None:
         if self.date_dir:
@@ -196,23 +253,50 @@ class ReviewScreen(Screen):
         except Exception:
             return None
 
+    def _build_prepend_preview(self, key: str, draft: str) -> str:
+        """Build a combined preview for prepend mode: new entry + existing content."""
+        today = date.today().isoformat()
+        existing = self.current_statuses.get(key, "")
+        entries = split_entries(existing)
+
+        # Show what the field will look like after approve
+        preview_parts = [f"## {today}\n\n{draft}"]
+        for entry in entries:
+            if entry.date_str == today:
+                continue  # Will be replaced by the new entry
+            header = f"## {entry.date_str}" if entry.date_str else ""
+            if header:
+                preview_parts.append(f"{header}\n\n{entry.body}")
+            else:
+                preview_parts.append(entry.body)
+        return "\n\n---\n\n".join(preview_parts)
+
     def _update_panels(self) -> None:
         key = self._current_key()
         if not key:
             return
 
         draft = self.drafts.get(key, "(no draft)")
+
+        # Draft panel — left pane
         draft_panel = self.query_one("#draft-panel", RichLog)
         draft_panel.clear()
-        draft_panel.write(f"[bold]New draft — {key}[/bold]\n\n{draft}")
+        mode_tag = " [prepend]" if self._is_prepend else ""
+        draft_panel.write(f"[bold]New draft — {key}{mode_tag}[/bold]\n\n{draft}")
 
-        previous = self.current_statuses.get(key, "")
+        # Right pane — current status or result preview
         current_panel = self.query_one("#current-panel", RichLog)
         current_panel.clear()
-        if previous:
-            current_panel.write(f"[bold]Previous status — {key}[/bold]\n\n{previous}")
+
+        if self._is_prepend:
+            preview = self._build_prepend_preview(key, draft)
+            current_panel.write(f"[bold]Result Preview — {key}[/bold]\n\n{preview}")
         else:
-            current_panel.write(f"[bold]Previous status — {key}[/bold]\n\n[dim](none filed)[/dim]")
+            previous = self.current_statuses.get(key, "")
+            if previous:
+                current_panel.write(f"[bold]Previous status — {key}[/bold]\n\n{previous}")
+            else:
+                current_panel.write(f"[bold]Previous status — {key}[/bold]\n\n[dim](none filed)[/dim]")
 
     def _update_draft_panel(self) -> None:
         self._update_panels()
@@ -224,10 +308,11 @@ class ReviewScreen(Screen):
         )
         skipped = sum(1 for r in self.results.values() if r.action == "skipped")
         total = len(self.issues)
+        approve_label = "a=approve (prepend)" if self._is_prepend else "a=approve"
         self.query_one("#status-bar", Static).update(
             f"  {approved + skipped}/{total} reviewed  |  "
             f"{approved} approved  {skipped} skipped  |  "
-            f"a=approve  s=skip  e=edit  i=revise  r=refresh  R=refresh all  q=quit"
+            f"{approve_label}  s=skip  e=edit  i=revise  r=refresh  R=refresh all  q=quit"
         )
 
     def _mark_action(self, key: str, label: str) -> None:
@@ -241,16 +326,43 @@ class ReviewScreen(Screen):
             table.move_cursor(row=table.cursor_row + 1)
         self._update_draft_panel()
 
-    def action_approve(self) -> None:
-        key = self._current_key()
-        if not key:
-            return
+    def _do_approve(self, key: str) -> None:
+        """Finalize approval: record result, fire Jira update, advance."""
         draft = self.drafts.get(key, "")
         color = extract_color(draft)
         self.results[key] = ReviewResult(key=key, action="approved", color=color, text=draft)
         self._mark_action(key, "Approved")
         self.run_worker(self._do_jira_update(key, draft), exclusive=False)
         self._advance()
+
+    def action_approve(self) -> None:
+        key = self._current_key()
+        if not key:
+            return
+
+        if self._is_prepend:
+            # Check for same-day dedup
+            existing = self.current_statuses.get(key, "")
+            entries = split_entries(existing)
+            today = date.today().isoformat()
+            if entries and entries[0].date_str == today:
+                # Show warning and confirmation dialog
+                self._mark_action(key, f"⚠ Already has status from today")
+                self.app.push_screen(
+                    DedupConfirmScreen(key, today),
+                    callback=lambda confirmed: self._on_dedup_confirmed(key, confirmed),
+                )
+                return
+
+        self._do_approve(key)
+
+    def _on_dedup_confirmed(self, key: str, confirmed: bool) -> None:
+        """Handle result from dedup confirmation dialog."""
+        if confirmed:
+            self._do_approve(key)
+        else:
+            # Clear the warning and stay on the same issue
+            self._mark_action(key, "-")
 
     def action_skip(self) -> None:
         key = self._current_key()
@@ -429,7 +541,9 @@ class ReviewScreen(Screen):
         if self._aiohttp_session is None or self._aiohttp_session.closed:
             self._aiohttp_session = aiohttp.ClientSession()
         result = await update_jira_status(
-            self._aiohttp_session, self.jira_url, self.auth_headers, key, draft
+            self._aiohttp_session, self.jira_url, self.auth_headers, key, draft,
+            update_mode=self.update_mode,
+            max_history=self.max_history,
         )
         table = self.query_one("#issue-table", DataTable)
         if result.ok:
@@ -445,7 +559,7 @@ class ReviewScreen(Screen):
 
 
 class StatusUpdateApp(App):
-    """Full-pipeline TUI: gather → draft → interactive review → summary."""
+    """Full-pipeline TUI: gather -> draft -> interactive review -> summary."""
 
     CSS = """
     #phase-label {
@@ -545,6 +659,10 @@ class StatusUpdateApp(App):
 
             current_statuses = load_current_statuses(date_dir, [i["key"] for i in manifest["issues"]])
 
+            # Resolve update_mode and max_history
+            update_mode = getattr(args, "update_mode", None) or prefs.update_mode
+            max_history = getattr(args, "max_history", None) or prefs.max_history
+
             self._set_phase("Review")
             try:
                 auth_headers = get_jira_auth()
@@ -561,6 +679,8 @@ class StatusUpdateApp(App):
                     scripts_dir=self.scripts_dir,
                     args=self.args,
                     system_prompt=system_prompt,
+                    update_mode=update_mode,
+                    max_history=max_history,
                 )
             ) or []
 
@@ -584,6 +704,8 @@ class StatusUpdateApp(App):
                 f"{usage.input_tokens + usage.output_tokens} tokens, "
                 f"{cost_str} ({model})"
             )
+            if update_mode == "prepend":
+                self._log(f"  Mode: prepend (max_history={max_history or 'unlimited'})")
             if approved:
                 self._log("\n[bold]Updated issues:[/bold]")
                 tags = {"Green": "green", "Yellow": "yellow", "Red": "red"}

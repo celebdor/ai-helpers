@@ -24,6 +24,8 @@ class UserPrefs:
     writing_rules: list = field(default_factory=list)
     jira_url: str = "https://redhat.atlassian.net"
     skills_dir: Optional[str] = None
+    update_mode: str = "replace"    # "replace" or "prepend"
+    max_history: int = 0            # 0 = unlimited (only meaningful in prepend mode)
     profiles: dict = field(default_factory=dict)
 
 
@@ -44,6 +46,8 @@ def load_prefs(path: Optional[Path] = None) -> UserPrefs:
         writing_rules=llm.get("writing_rules", []),
         jira_url=jira.get("url", "https://redhat.atlassian.net"),
         skills_dir=jira.get("skills_dir"),
+        update_mode=jira.get("update_mode", "replace"),
+        max_history=jira.get("max_history", 0),
         profiles=data.get("profiles", {}),
     )
 
