@@ -10,6 +10,7 @@ from typing import Optional
 
 import aiohttp
 
+from textual import events
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.screen import Screen
@@ -79,18 +80,48 @@ def edit_in_editor(draft_text: str) -> Optional[str]:
     return result if result else None
 
 
+class ScrollPane(RichLog):
+    """A focusable RichLog split: j/k scroll a line, ctrl-f/b page, g/G jump.
+
+    Move focus between splits with Ctrl-w j/k (see ReviewScreen.on_key).
+    """
+
+    BINDINGS = [
+        Binding("j", "scroll_down", "Scroll down", show=False),
+        Binding("k", "scroll_up", "Scroll up", show=False),
+        Binding("ctrl+f", "page_down", "Page down", show=False),
+        Binding("ctrl+b", "page_up", "Page up", show=False),
+        Binding("g", "scroll_home", "Top", show=False),
+        Binding("G", "scroll_end", "Bottom", show=False),
+    ]
+
+
 class ReviewScreen(Screen):
-    """Interactive review: DataTable + new draft pane + previous status pane."""
+    """Interactive review: DataTable + new draft pane + previous status pane.
+
+    The three panes behave like vim splits: Ctrl-w j/k moves focus between
+    them, and within the focused split j/k move the row cursor (table) or
+    scroll the content (draft / previous-status).
+    """
+
+    # Splits top-to-bottom, for Ctrl-w j/k navigation.
+    SPLITS = ("#issue-table", "#draft-panel", "#current-panel")
 
     CSS = """
     DataTable {
         height: 1fr;
         min-height: 5;
     }
+    DataTable:focus {
+        border: tall $success;
+    }
     #draft-panel {
         height: 1fr;
         border: tall $accent;
         padding: 1;
+    }
+    #draft-panel:focus {
+        border: tall $success;
     }
     #current-panel {
         height: 1fr;
@@ -98,10 +129,18 @@ class ReviewScreen(Screen):
         padding: 1;
         color: $text-muted;
     }
+    #current-panel:focus {
+        border: tall $success;
+    }
     #request-input {
         display: none;
         height: 3;
         border: tall $warning;
+    }
+    #search-input {
+        display: none;
+        height: 3;
+        border: tall $accent;
     }
     #status-bar {
         dock: bottom;
@@ -120,6 +159,15 @@ class ReviewScreen(Screen):
         Binding("r", "refresh", "Refresh issue & re-draft", show=True),
         Binding("R", "refresh_all", "Refresh all & re-draft", show=True),
         Binding("q", "quit_review", "Quit", show=True),
+        # Vim-style navigation between issues (active while the table is focused).
+        Binding("j", "cursor_down", "Down", show=False),
+        Binding("k", "cursor_up", "Up", show=False),
+        Binding("g", "cursor_top", "Top", show=False),
+        Binding("G", "cursor_bottom", "Bottom", show=False),
+        # Vim-style search: / to search, n/N to cycle matches.
+        Binding("slash", "search", "Search", show=False),
+        Binding("n", "search_next", "Next match", show=False),
+        Binding("N", "search_prev", "Prev match", show=False),
     ]
 
     def __init__(
@@ -149,6 +197,11 @@ class ReviewScreen(Screen):
         self.results: dict[str, ReviewResult] = {}
         self._aiohttp_session: Optional[aiohttp.ClientSession] = None
         self._col_keys = None
+        # Vim-style search state.
+        self._search_matches: list[int] = []
+        self._search_idx = 0
+        # Pending Ctrl-w window command (vim split navigation).
+        self._pending_window = False
 
     def _save_drafts(self) -> None:
         if self.date_dir:
@@ -157,9 +210,10 @@ class ReviewScreen(Screen):
     def compose(self) -> ComposeResult:
         yield Header()
         yield DataTable(id="issue-table")
-        yield RichLog(id="draft-panel", highlight=True, markup=True)
-        yield RichLog(id="current-panel", highlight=True, markup=True)
+        yield ScrollPane(id="draft-panel", highlight=True, markup=True, auto_scroll=False)
+        yield ScrollPane(id="current-panel", highlight=True, markup=True, auto_scroll=False)
         yield Input(placeholder="Describe the changes you want...", id="request-input")
+        yield Input(placeholder="Search issues by key or summary...", id="search-input")
         yield Static("", id="status-bar")
         yield Footer()
 
@@ -186,6 +240,36 @@ class ReviewScreen(Screen):
     def on_data_table_row_highlighted(self) -> None:
         self._update_panels()
 
+    def on_key(self, event: events.Key) -> None:
+        """Handle the Ctrl-w window prefix for vim-style split navigation."""
+        # Never intercept while typing in a text input.
+        if isinstance(self.focused, Input):
+            return
+        if self._pending_window:
+            self._pending_window = False
+            if event.key in ("j", "k", "w"):
+                event.stop()
+                event.prevent_default()
+                self._move_split(event.key)
+            return
+        if event.key == "ctrl+w":
+            self._pending_window = True
+            event.stop()
+            event.prevent_default()
+
+    def _move_split(self, key: str) -> None:
+        """Move focus between the stacked splits. j=down, k=up (no wrap), w=cycle."""
+        panes = [self.query_one(sel) for sel in self.SPLITS]
+        current = self.focused
+        idx = panes.index(current) if current in panes else 0
+        if key == "j":
+            idx = min(idx + 1, len(panes) - 1)
+        elif key == "k":
+            idx = max(idx - 1, 0)
+        else:  # "w": cycle forward with wrap
+            idx = (idx + 1) % len(panes)
+        panes[idx].focus()
+
     def _current_key(self) -> Optional[str]:
         table = self.query_one("#issue-table", DataTable)
         if table.cursor_row is None:
@@ -205,6 +289,7 @@ class ReviewScreen(Screen):
         draft_panel = self.query_one("#draft-panel", RichLog)
         draft_panel.clear()
         draft_panel.write(f"[bold]New draft — {key}[/bold]\n\n{draft}")
+        draft_panel.scroll_home(animate=False)
 
         previous = self.current_statuses.get(key, "")
         current_panel = self.query_one("#current-panel", RichLog)
@@ -213,6 +298,7 @@ class ReviewScreen(Screen):
             current_panel.write(f"[bold]Previous status — {key}[/bold]\n\n{previous}")
         else:
             current_panel.write(f"[bold]Previous status — {key}[/bold]\n\n[dim](none filed)[/dim]")
+        current_panel.scroll_home(animate=False)
 
     def _update_draft_panel(self) -> None:
         self._update_panels()
@@ -227,6 +313,7 @@ class ReviewScreen(Screen):
         self.query_one("#status-bar", Static).update(
             f"  {approved + skipped}/{total} reviewed  |  "
             f"{approved} approved  {skipped} skipped  |  "
+            f"j/k=nav  /=search  n/N=match  ^w j/k=panes  "
             f"a=approve  s=skip  e=edit  i=revise  r=refresh  R=refresh all  q=quit"
         )
 
@@ -240,6 +327,66 @@ class ReviewScreen(Screen):
         if table.cursor_row is not None and table.cursor_row < table.row_count - 1:
             table.move_cursor(row=table.cursor_row + 1)
         self._update_draft_panel()
+
+    def action_cursor_down(self) -> None:
+        table = self.query_one("#issue-table", DataTable)
+        if table.cursor_row is not None and table.cursor_row < table.row_count - 1:
+            table.move_cursor(row=table.cursor_row + 1)
+
+    def action_cursor_up(self) -> None:
+        table = self.query_one("#issue-table", DataTable)
+        if table.cursor_row is not None and table.cursor_row > 0:
+            table.move_cursor(row=table.cursor_row - 1)
+
+    def action_cursor_top(self) -> None:
+        table = self.query_one("#issue-table", DataTable)
+        if table.row_count:
+            table.move_cursor(row=0)
+
+    def action_cursor_bottom(self) -> None:
+        table = self.query_one("#issue-table", DataTable)
+        if table.row_count:
+            table.move_cursor(row=table.row_count - 1)
+
+    def action_search(self) -> None:
+        inp = self.query_one("#search-input", Input)
+        inp.display = True
+        inp.focus()
+
+    def _do_search(self, query: str) -> None:
+        inp = self.query_one("#search-input", Input)
+        inp.display = False
+        inp.clear()
+        table = self.query_one("#issue-table", DataTable)
+        table.focus()
+        query = query.strip().lower()
+        if not query:
+            return
+        self._search_matches = [
+            i for i, issue in enumerate(self.issues)
+            if query in issue["key"].lower()
+            or query in (issue.get("summary") or "").lower()
+        ]
+        if not self._search_matches:
+            self.app.notify(f"No match for '{query}'", severity="warning")
+            return
+        self._search_idx = 0
+        table.move_cursor(row=self._search_matches[0])
+
+    def _jump_match(self, delta: int) -> None:
+        if not self._search_matches:
+            self.app.notify("No active search", severity="warning")
+            return
+        self._search_idx = (self._search_idx + delta) % len(self._search_matches)
+        self.query_one("#issue-table", DataTable).move_cursor(
+            row=self._search_matches[self._search_idx]
+        )
+
+    def action_search_next(self) -> None:
+        self._jump_match(1)
+
+    def action_search_prev(self) -> None:
+        self._jump_match(-1)
 
     def action_approve(self) -> None:
         key = self._current_key()
@@ -378,6 +525,9 @@ class ReviewScreen(Screen):
             draft_panel.loading = False
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
+        if event.input.id == "search-input":
+            self._do_search(event.value)
+            return
         instruction = event.value.strip()
         inp = self.query_one("#request-input", Input)
         inp.display = False
