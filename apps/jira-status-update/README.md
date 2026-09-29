@@ -7,7 +7,7 @@ A TUI app that gathers Jira issue data (PRs, changelogs, comments, descendants),
 - **Automated data gathering** — pulls issue activity from Jira and GitHub (PRs, reviews, commits) for a configurable date range
 - **LLM-drafted updates** — produces Red/Yellow/Green status summaries using your project's analysis and formatting rules
 - **Interactive TUI review** — side-by-side view of the new draft and previous status for each issue
-- **In-app editing** — edit drafts in `$EDITOR`, request AI revisions via the API, or hand off to a coding agent (Claude Code, OpenCode) for tool-assisted changes
+- **In-app editing** — edit drafts in `$EDITOR`, request AI revisions via the API, or hand off to a coding agent (Claude Code, pi, OpenCode) for tool-assisted changes
 - **Single-issue refresh** — re-gather and re-draft one issue without restarting the pipeline
 - **Same-day caching** — gathered data and drafts are cached per UTC day; subsequent runs skip re-gathering
 - **Profiles** — save named parameter sets (project, component, label, assignees) in `prefs.toml`
@@ -61,7 +61,7 @@ Key settings:
 ```toml
 [llm]
 model = "claude-sonnet-5"
-# coding_agent = "claude"   # enables tool-assisted revisions via Claude Code
+# coding_agent = "claude"   # enables tool-assisted revisions ("claude", "pi", or "opencode")
 writing_rules = [
   "No fractions or ratios like 7/8 or 4/25",
   "No completion percentages",
@@ -113,7 +113,7 @@ The app has two phases: a pipeline screen (gather + draft) and the review screen
 | `R` | Refresh all issues (re-gather + re-draft) |
 | `q` | Quit review |
 
-When `coding_agent` is configured in prefs, `i` suspends the TUI and opens the agent interactively. Otherwise it uses a single API call.
+When `coding_agent` is configured in prefs, `i` suspends the TUI and opens the agent interactively. Otherwise it uses a single API call. Supported agents: `claude`, `pi`, `opencode`.
 
 ## Running tests
 

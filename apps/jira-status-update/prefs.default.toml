@@ -3,9 +3,9 @@
 
 [llm]
 model = "claude-sonnet-5"
-# Coding agent CLI for the "request changes" feature (r).
+# Coding agent CLI for the "request changes" feature (i).
 # When set, revisions are handled by this agent — it can search GitHub,
-# fetch PR details, etc.  Supported values: "claude", "opencode".
+# fetch PR details, etc.  Supported values: "claude", "pi", "opencode".
 # When unset, revisions use a single Anthropic API call (no GitHub access).
 # coding_agent = "claude"
 

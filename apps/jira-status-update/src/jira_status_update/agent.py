@@ -1,4 +1,4 @@
-"""Coding agent (Claude Code / OpenCode) integration for interactive draft revision."""
+"""Coding agent (Claude Code / pi / OpenCode) integration for interactive draft revision."""
 
 import os
 import subprocess as sp
@@ -70,6 +70,8 @@ def _run_agent_interactive(
     agent_name = os.path.basename(agent)
     if agent_name == "opencode":
         cmd = [agent, "run", "-i", "--model", model, short_prompt]
+    elif agent_name == "pi":
+        cmd = [agent, "--model", model, f"@{prompt_path}"]
     else:
         cmd = [agent, "--model", model, short_prompt]
     try:
